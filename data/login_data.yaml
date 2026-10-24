@@ -1,0 +1,103 @@
+# 登录/注册域用例数据 —— 与 test_login.py 的通用执行器配套
+# 字段说明：
+#   name     用例名（Allure 标题、报告可读性）
+#   api      api 层注册名（见 testcases/api_registry.py 的 REGISTRY）
+#   no_auth  true 时使用"不带 token 的干净客户端"（测未登录场景）
+#   params   传给 api 方法的参数；省略某参数 = 请求体里不带该字段（反向用例构造手法）
+#   expect   三层断言：status_code / code / fields(JSONPath)
+
+cases:
+  - name: 正确账号密码登录成功
+    api: login
+    params: { username: lemon, password: "123456" }
+    expect:
+      status_code: 200
+      code: 0
+      fields:
+        $.data.user.username: lemon
+        $.data.user.nickname: 柠檬
+        $.data.expires_in: 1800
+
+  - name: 密码错误登录失败
+    api: login
+    params: { username: lemon, password: "wrong-pass" }
+    expect:
+      code: 1002
+      fields:
+        $.message: 密码错误
+
+  - name: 用户不存在登录失败
+    api: login
+    params: { username: nobody_here, password: "123456" }
+    expect:
+      code: 1001
+      fields:
+        $.message: 用户不存在
+
+  - name: 缺少用户名登录失败
+    api: login
+    params: { password: "123456" }
+    expect:
+      code: 1004
+
+  - name: 缺少密码登录失败
+    api: login
+    params: { username: lemon }
+    expect:
+      code: 1004
+
+  - name: 注册新用户成功
+    api: register
+    params: { username: new_user_01, password: "abc12345", nickname: 新人一号 }
+    expect:
+      code: 0
+      fields:
+        $.data.username: new_user_01
+        $.data.user_id: 3        # 种子用户2个，新注册自增id=3（依赖套件开始时的数据重置）
+
+  - name: 注册重名失败
+    api: register
+    params: { username: lemon, password: "abc12345" }
+    expect:
+      code: 1003
+      fields:
+        $.message: 用户名已存在
+
+  - name: 注册密码过短失败
+    api: register
+    params: { username: short_pwd_user, password: "123" }
+    expect:
+      code: 1004
+      fields:
+        $.message: 密码至少 6 位
+
+  - name: 注册缺少参数失败
+    api: register
+    params: { username: only_name_user }
+    expect:
+      code: 1004
+
+  - name: 携带有效token查询个人信息
+    api: me
+    expect:
+      status_code: 200
+      code: 0
+      fields:
+        $.data.username: lemon
+        $.data.nickname: 柠檬
+
+  - name: 无token查询个人信息被拒绝
+    api: me
+    no_auth: true
+    expect:
+      status_code: 401
+      code: 4010
+      fields:
+        $.message: 未登录或 token 无效/过期
+
+  - name: 伪造token查询个人信息被拒绝
+    api: me_with_token
+    params: { token: "forged.token.value" }
+    expect:
+      status_code: 401
+      code: 4010

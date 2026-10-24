@@ -1,0 +1,22 @@
+# ============================================================
+# 接口自动化框架配置（与被测系统 demo-mall 的 config.py 保持"镜像"）
+# ============================================================
+
+# 默认使用的环境 key（下面的二级字段名）。CI 里可用环境变量 MALL_TEST_ENV 覆盖
+default_env: dev
+
+dev:
+  base_url: http://127.0.0.1:5000
+  timeout: 10                    # 单请求超时（秒）
+  test_key: mall-test-key        # 调用被测系统测试辅助接口的钥匙
+  users:                         # 测试账号（与 demo-mall/seed.py 的种子数据对应）
+    main:
+      username: lemon
+      password: "123456"         # 密码必须加引号，否则 YAML 会解析成 int
+    alt:
+      username: test
+      password: "123456"
+
+log:
+  level: INFO                    # 想看完整请求/响应报文改成 DEBUG
+  dir: reports/logs

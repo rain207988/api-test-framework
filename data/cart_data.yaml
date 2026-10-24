@@ -1,0 +1,95 @@
+# 购物车域用例数据
+# 设计原则：单步用例只做"无状态依赖"的断言（反向/参数校验/结构），
+# 有状态的正向链路（加购→查→改→删）全部放 chain_data.yaml，保证可重复执行。
+
+cases:
+  - name: 未登录查询购物车被拒绝
+    api: cart_get
+    no_auth: true
+    expect:
+      status_code: 401
+      code: 4010
+
+  - name: 未登录加入购物车被拒绝
+    api: cart_add
+    no_auth: true
+    params: { goods_id: 1, quantity: 1 }
+    expect:
+      status_code: 401
+      code: 4010
+
+  - name: 未登录修改购物车数量被拒绝
+    api: cart_update
+    no_auth: true
+    params: { item_id: 1, quantity: 2 }
+    expect:
+      status_code: 401
+      code: 4010
+
+  - name: 未登录删除购物车商品被拒绝
+    api: cart_delete
+    no_auth: true
+    params: { item_id: 1 }
+    expect:
+      status_code: 401
+      code: 4010
+
+  - name: 加入购物车商品不存在
+    api: cart_add
+    params: { goods_id: 9999, quantity: 1 }
+    expect:
+      code: 2001
+      fields:
+        $.message: 商品不存在或已下架
+
+  - name: 加入购物车数量为0
+    api: cart_add
+    params: { goods_id: 1, quantity: 0 }
+    expect:
+      code: 1004
+
+  - name: 加入购物车数量为负数
+    api: cart_add
+    params: { goods_id: 1, quantity: -1 }
+    expect:
+      code: 1004
+
+  - name: 加入购物车数量非整数
+    api: cart_add
+    params: { goods_id: 1, quantity: abc }
+    expect:
+      code: 1004
+
+  - name: 加入购物车缺少goods_id
+    api: cart_add
+    params: { quantity: 1 }
+    expect:
+      code: 1004
+
+  - name: 登录后查询购物车结构正常
+    api: cart_get
+    expect:
+      status_code: 200
+      code: 0
+      fields:
+        $.data.count: 0          # 套件开始时数据已重置，主账号购物车为空
+
+  - name: 修改不存在的购物车项
+    api: cart_update
+    params: { item_id: 99999, quantity: 2 }
+    expect:
+      code: 3002
+      fields:
+        $.message: 购物车中不存在该商品
+
+  - name: 修改数量非法字符串优先报参数错误
+    api: cart_update
+    params: { item_id: 99999, quantity: abc }
+    expect:
+      code: 1004                 # 参数校验先于存在性校验——接口自身的校验顺序契约
+
+  - name: 删除不存在的购物车项
+    api: cart_delete
+    params: { item_id: 99999 }
+    expect:
+      code: 3002

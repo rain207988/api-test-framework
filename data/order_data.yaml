@@ -1,0 +1,85 @@
+# 订单域用例数据
+# 同购物车域：单步用例全部无状态依赖；支付/取消的正向流转在 chain_data.yaml。
+# 直购下单用固定商品(id2=智能手表 Pro 1299.0)，不碰购物车，与其他用例互不影响。
+
+cases:
+  - name: 未登录创建订单被拒绝
+    api: order_create
+    no_auth: true
+    params: { items: [{ goods_id: 2, quantity: 1 }] }
+    expect:
+      status_code: 401
+      code: 4010
+
+  - name: 未登录查询订单列表被拒绝
+    api: order_list
+    no_auth: true
+    expect:
+      status_code: 401
+      code: 4010
+
+  - name: 直购下单成功
+    api: order_create
+    params: { items: [{ goods_id: 2, quantity: 1 }] }
+    expect:
+      status_code: 200
+      code: 0
+      fields:
+        $.data.total_amount: 1299.0
+        $.data.status: pending
+
+  - name: 购物车下单缺少items参数
+    api: order_create
+    expect:
+      code: 1004
+
+  - name: items为空列表报参数错误
+    api: order_create
+    params: { items: [] }
+    expect:
+      code: 1004
+
+  - name: 直购商品不存在
+    api: order_create
+    params: { items: [{ goods_id: 9999, quantity: 1 }] }
+    expect:
+      code: 2001
+
+  - name: 直购数量非法
+    api: order_create
+    params: { items: [{ goods_id: 2, quantity: 0 }] }
+    expect:
+      code: 1004
+
+  - name: 查询订单列表结构正常
+    api: order_list
+    expect:
+      status_code: 200
+      code: 0
+
+  - name: 按状态过滤待支付订单
+    api: order_list
+    params: { status: pending }
+    expect:
+      status_code: 200
+      code: 0
+
+  - name: 查询不存在的订单详情
+    api: order_detail
+    params: { order_id: 99999 }
+    expect:
+      code: 4001
+      fields:
+        $.message: 订单不存在
+
+  - name: 支付不存在的订单
+    api: order_pay
+    params: { order_id: 99999 }
+    expect:
+      code: 4001
+
+  - name: 取消不存在的订单
+    api: order_cancel
+    params: { order_id: 99999 }
+    expect:
+      code: 4001

@@ -1,0 +1,130 @@
+# 业务链路用例数据 —— 由 testcases/api_registry.py 的 run_chain 执行
+# 与单步用例的区别：
+#   steps     一条用例 = 多个按序执行的步骤（每步可独立 expect 断言）
+#   extract   从某步响应中按 JSONPath 提取值存入链路上下文，供后续步骤用 {{var}} 引用
+#   约定：提取变量名为 token 时自动注入客户端 Authorization（登录→带鉴权请求的关键机制）
+#
+# 确定性说明：每条链路自我闭环（开始/结束时购物车、库存回到确定状态），可重复执行。
+
+cases:
+  - name: 全链路-登录查商品加购下单支付
+    steps:
+      - name: 登录主账号
+        api: login
+        params: { username: lemon, password: "123456" }
+        expect: { code: 0 }
+        extract: { token: $.data.token }
+
+      - name: 查询商品列表
+        api: goods_list
+        params: { page: 1, page_size: 5 }
+        expect: { code: 0, fields: { $.data.total: 10 } }
+
+      - name: 查看商品详情-无线蓝牙耳机
+        api: goods_detail
+        params: { goods_id: 1 }
+        expect: { code: 0, fields: { $.data.price: 199.0 } }
+
+      - name: 加入购物车2件
+        api: cart_add
+        params: { goods_id: 1, quantity: 2 }
+        expect: { code: 0, fields: { $.data.quantity: 2 } }
+
+      - name: 查询购物车合计398元
+        api: cart_get
+        expect: { code: 0, fields: { $.data.count: 1, $.data.total_amount: 398.0 } }
+
+      - name: 从购物车创建订单
+        api: order_create
+        params: { from_cart: true }
+        expect: { code: 0, fields: { $.data.total_amount: 398.0, $.data.status: pending } }
+        extract: { order_id: $.data.order_id, order_no: $.data.order_no }
+
+      - name: 查询订单详情核对明细
+        api: order_detail
+        params: { order_id: "{{order_id}}" }
+        expect:
+          code: 0
+          fields:
+            $.data.order_no: "{{order_no}}"
+            $.data.status: pending
+            $.data.items[0].goods_name: 无线蓝牙耳机
+            $.data.items[0].quantity: 2
+
+      - name: 支付订单
+        api: order_pay
+        params: { order_id: "{{order_id}}" }
+        expect: { code: 0, fields: { $.data.status: paid } }
+
+      - name: 重复支付被拒绝
+        api: order_pay
+        params: { order_id: "{{order_id}}" }
+        expect: { code: 4002, fields: { $.message: 当前状态 paid 不允许支付 } }
+
+      - name: 已支付订单不能取消
+        api: order_cancel
+        params: { order_id: "{{order_id}}" }
+        expect: { code: 4002 }
+
+      - name: 下单后购物车已清空
+        api: cart_get
+        expect: { code: 0, fields: { $.data.count: 0 } }
+
+  - name: 空购物车下单被拒绝
+    steps:
+      - name: 登录备用账号（购物车从未使用）
+        api: login
+        params: { username: test, password: "123456" }
+        expect: { code: 0 }
+        extract: { token: $.data.token }
+
+      - name: 空购物车创建订单
+        api: order_create
+        params: { from_cart: true }
+        expect: { code: 3001, fields: { $.message: 购物车为空 } }
+
+  - name: 直购下单取消库存回补
+    steps:
+      - name: 登录主账号
+        api: login
+        params: { username: lemon, password: "123456" }
+        expect: { code: 0 }
+        extract: { token: $.data.token }
+
+      - name: 查看快充充电器库存
+        api: goods_detail
+        params: { goods_id: 3 }
+        expect: { code: 0, fields: { $.data.stock: 100 } }
+
+      - name: 直购一件
+        api: order_create
+        params: { items: [{ goods_id: 3, quantity: 1 }] }
+        expect: { code: 0, fields: { $.data.total_amount: 89.0, $.data.status: pending } }
+        extract: { order_id: $.data.order_id }
+
+      - name: 取消订单
+        api: order_cancel
+        params: { order_id: "{{order_id}}" }
+        expect: { code: 0, fields: { $.data.status: cancelled } }
+
+      - name: 取消后库存回补到100
+        api: goods_detail
+        params: { goods_id: 3 }
+        expect: { code: 0, fields: { $.data.stock: 100 } }
+
+  - name: token被吊销后自动重登重放
+    steps:
+      - name: 登录主账号
+        api: login
+        params: { username: lemon, password: "123456" }
+        expect: { code: 0 }
+        extract: { token: $.data.token }
+
+      - name: 调用测试接口吊销该token
+        api: test_revoke
+        params: { token: "{{token}}" }
+        expect: { code: 0, fields: { $.data.revoked: true } }
+
+      - name: 用已吊销token查询购物车（框架应自动重登并重放成功）
+        api: cart_get
+        expect: { code: 0 }
