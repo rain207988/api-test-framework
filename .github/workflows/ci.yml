@@ -1,0 +1,119 @@
+# =============================================================================
+# GitHub Actions CI —— demo-mall 接口自动化回归流水线
+#
+# 触发：push（每次推送）、pull_request（PR 卡点）、workflow_dispatch（Actions 页手动触发）
+# 流程：checkout 测试仓库与被测仓库 → 准备 Python → 起被测系统 → 等健康 → 重置种子
+#       → pytest 全量回归（--alluredir）→ 归档 Allure 原始结果
+#
+# 说明：本文件未在本机真实运行验证（编写环境无 GitHub 远端），复现时以 Actions 运行日志为准。
+# =============================================================================
+
+name: api-test-regression          # 在 Actions 页面显示的工作流名
+
+on:
+  push:                            # 每次推送触发：验证"这次改动是否破坏存量功能"
+  pull_request:                    # PR 触发：合并前卡点
+  workflow_dispatch:               # 手动触发：发版前主动跑一遍
+
+jobs:
+  regression:
+    # ubuntu-latest 是 GitHub 免费提供的干净虚拟机：每轮全新环境，天然无历史数据污染
+    runs-on: ubuntu-latest
+
+    steps:
+      # -------------------------------------------------------------------
+      # 1. 拉取本仓库（api-test-framework：测试代码与依赖清单）
+      #    每个 step 都是独立 shell，所以路径统一从仓库根写起
+      # -------------------------------------------------------------------
+      - name: 检出测试代码仓库
+        uses: actions/checkout@v4
+
+      # -------------------------------------------------------------------
+      # 2. 拉取被测系统仓库（demo-mall）到 ./demo-mall 子目录
+      #    continue-on-error：被测仓库不存在/不可访问时，本步骤失败但不中断 job——
+      #    让后续步骤自己暴露问题（演练场景里被测仓库可能尚未推送）
+      # -------------------------------------------------------------------
+      - name: 检出被测系统仓库
+        uses: actions/checkout@v4
+        with:
+          repository: rain207988/demo-mall
+          path: demo-mall
+        continue-on-error: true
+
+      # -------------------------------------------------------------------
+      # 3. 准备 Python 3.13（与本地开发/被测系统版本对齐）
+      #    cache: pip 按 requirements.txt 哈希缓存下载包，依赖不变时秒级装完
+      # -------------------------------------------------------------------
+      - name: 安装 Python 3.13
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+          cache: pip
+          cache-dependency-path: api-test-framework/requirements.txt
+
+      # -------------------------------------------------------------------
+      # 4. 安装测试框架依赖（requests/pytest/allure-pytest 等，版本由 requirements.txt 锁定）
+      #    注意路径是 api-test-framework/requirements.txt：本 workflow 文件
+      #    可能被放在仓库根运行，显式写相对路径最稳
+      # -------------------------------------------------------------------
+      - name: 安装测试依赖
+        run: pip install -r api-test-framework/requirements.txt
+
+      # -------------------------------------------------------------------
+      # 5. 后台启动被测系统（prod 模式 = waitress 8 线程，生产级 WSGI）
+      #    nohup ... & 让进程脱离本步骤 shell 存活——后续步骤仍能连到 5000 端口
+      #    （runner 是一次性虚拟机，job 结束进程自动消亡，无需清理）
+      # -------------------------------------------------------------------
+      - name: 后台启动被测系统
+        run: |
+          cd demo-mall
+          nohup python run.py --mode prod --port 5000 > /tmp/mall.log 2>&1 &
+          echo "demo-mall 已后台启动（日志：/tmp/mall.log）"
+
+      # -------------------------------------------------------------------
+      # 6. 等待被测系统应用层就绪（最多 30 秒）
+      #    为什么不能省：容器/进程"活着"≠"能服务"，Python 导入依赖、路由注册要几秒；
+      #    就绪探测失败则显式 exit 1——把"环境问题"和"用例失败"在日志里区分开
+      # -------------------------------------------------------------------
+      - name: 等待被测系统就绪
+        run: |
+          for i in $(seq 1 30); do
+            curl -sf http://127.0.0.1:5000/api/health && { echo "被测系统就绪"; exit 0; }
+            echo "等待中... ($i/30)"; sleep 1
+          done
+          echo "被测系统未就绪"; exit 1
+
+      # -------------------------------------------------------------------
+      # 7. 重置种子数据
+      #    回归测试的前提是"每次从确定的起点出发"：--reset 清库重建，
+      #    保证用例断言依赖的固定数据（价格/库存/账号）不被上一轮污染。
+      #    虽然本轮服务是全新起的，这里仍显式 reset 以幂等防脏库
+      # -------------------------------------------------------------------
+      - name: 重置种子数据
+        run: |
+          cd demo-mall
+          python seed.py --reset
+
+      # -------------------------------------------------------------------
+      # 8. 跑全量接口回归（pytest）
+      #    working-directory 切到测试框架目录（conftest/config 相对路径才对）
+      #    --alluredir：每条用例结果落成 allure-results/*.json（步骤 9 归档）
+      #    pytest 失败（退出码非0）会让本步骤红——这正是我们想要的
+      # -------------------------------------------------------------------
+      - name: 运行接口回归测试
+        working-directory: api-test-framework
+        run: pytest -v --alluredir=reports/allure-results
+
+      # -------------------------------------------------------------------
+      # 9. 归档 Allure 原始结果（可在 Actions 页 Artifacts 区下载）
+      #    if: always() 是关键：测试失败时 job 变红，没有这一行本步骤会被跳过，
+      #    失败现场就拿不到了——"失败时最需要报告"
+      #    retention-days=7：报告只留 7 天，防存储额度膨胀
+      # -------------------------------------------------------------------
+      - name: 归档 Allure 原始结果
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: allure-results
+          path: api-test-framework/reports/allure-results/
+          retention-days: 7
